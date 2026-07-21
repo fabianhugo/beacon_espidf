@@ -1,0 +1,17 @@
+.pio
+.pioenvs
+.piolibdeps
+.cache
+.clang-format
+.DS_Store
+.idea
+.vscode
+compile_commands.json
+__pycache__/
+
+# Build output / logs
+build.log
+/build/
+/managed_components/
+/dependencies.lock
+sdkconfig.old
