@@ -255,6 +255,40 @@ now that light sleep is BT-coordinated (the whole reason for this migration).
 
 ---
 
+## 2026-07-21 — BT modem sleep works: 90 mA → 30 mA (migration goal achieved)
+
+Enabled BLE controller modem sleep in `sdkconfig.defaults`
+(`CONFIG_BT_CTRL_MODEM_SLEEP=y`, `MODEM_SLEEP_MODE_1=y`,
+`LPCLK_SEL_RTC_SLOW=y`; removed the invalid `CONFIG_BT_LE_SLEEP_ENABLE`).
+Regenerated sdkconfig (delete-then-build) → `BT_CTRL_SLEEP_MODE_EFF=1`,
+`SLEEP_CLOCK_EFF=3` (RTC slow). **User flashed both boards: current dropped from
+~90 mA to ~30 mA with LEDs, buttons, pairing, and steady-state detection all
+working.** This is the payoff of the whole migration — coordinated (BT-aware)
+light sleep, which the plain-Arduino build could never compile in, and which the
+earlier *manual* `esp_light_sleep_start()` attempt achieved on current but broke
+detection. Here detection holds because the BT controller owns its own sleep.
+
+The internal-RC low-power clock (`RTC_SLOW`, ~±5 %) did NOT break the
+connectionless beacon in practice — adverts + passive scan tolerate loose timing.
+
+**Flashing caveat (expected, not a bug):** once the sleeping firmware is running,
+esptool auto-reset-into-bootloader fails (USB-Serial/JTAG drops off / doesn't
+service the reset during light sleep — "port busy" / "No serial data received").
+Reflash requires **manual bootloader entry** (hold BOOT, tap RESET). Optional dev
+fix if it becomes annoying: hold a `NO_LIGHT_SLEEP` PM lock for the first ~4 s
+after boot to give esptool an auto-reset window.
+
+**Burst-scan estimate (question raised, not implemented):** the big win is already
+captured by modem sleep; the radio now sleeps in the gaps of the continuous
+30 %-duty scan. Burst (→~13 % duty, long contiguous off-periods) would save only
+another ~5–10 mA on a minimal-LED build, and is negligible when a bright
+multi-LED strip dominates current. It also re-introduces detection latency + the
+pairing-window-vs-cycle bug. To bound it: measure radio-off current (short-press)
+— that's the floor burst can't beat. Recommendation: skip unless hard-squeezing
+battery on a minimal-LED build.
+
+---
+
 ## Current state of `beacon_espidf/` (as of 2026-07-21, after the above)
 
 - **Builds clean** (`beacon_c3_espidf`). `src/main.cpp` is now feature-current
