@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BLE Beacon — Firmware Flasher</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --fg: #e8eaed; --muted: #9aa0aa;
+    --accent: #b026ff; --accent-fg: #fff; --border: #262b34; --err: #ff6b6b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --card: #fff; --fg: #1a1d23; --muted: #5a616b;
+      --accent: #8a00e6; --accent-fg: #fff; --border: #e2e5ea; --err: #c0392b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 2rem 1rem;
+  }
+  main { width: 100%; max-width: 640px; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 2rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 1.5rem; margin-bottom: 1.25rem;
+  }
+  .flash-row { display: flex; flex-direction: column; align-items: center; gap: .75rem; text-align: center; }
+  button.btn {
+    font: inherit; font-weight: 600; cursor: pointer; border: 0;
+    background: var(--accent); color: var(--accent-fg);
+    padding: .8rem 1.6rem; border-radius: 10px; font-size: 1.05rem;
+  }
+  button.btn:hover { filter: brightness(1.1); }
+  .note { font-size: .9rem; color: var(--muted); }
+  .note.err { color: var(--err); }
+  h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+  ol, ul { margin: .5rem 0; padding-left: 1.3rem; }
+  li { margin: .35rem 0; }
+  code, kbd { background: rgba(128,128,128,.18); border-radius: 5px; padding: .1em .4em; font-size: .88em; }
+  kbd { border: 1px solid var(--border); }
+  .foot { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 1.5rem; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>⚡ BLE Proximity Beacon</h1>
+  <p class="sub">Flash the ESP32-C3 beacon firmware straight from your browser — no toolchain needed.</p>
+
+  <div class="card">
+    <div class="flash-row">
+      <esp-web-install-button manifest="manifest.json">
+        <button class="btn" slot="activate">Connect &amp; Install</button>
+        <div slot="unsupported" class="note err">
+          ⚠ This browser can't flash. Use <b>Chrome</b> or <b>Edge</b> on a desktop —
+          Web Serial isn't available in Firefox/Safari or on mobile.
+        </div>
+        <div slot="not-allowed" class="note err">
+          ⚠ This page must be opened over <b>HTTPS</b> (or <code>localhost</code>).
+        </div>
+      </esp-web-install-button>
+      <p class="note">Plug the board in via USB, click, then pick its serial port in the dialog.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Before you start</h2>
+    <ul>
+      <li>Use <b>Chrome</b> or <b>Edge</b> on a <b>desktop</b> computer.</li>
+      <li>Connect the ESP32-C3 board with a <b>data</b> USB cable (not charge-only).</li>
+    </ul>
+
+    <h2>If it won't connect</h2>
+    <p class="note">
+      The running firmware light-sleeps, which can stop the chip from auto-entering
+      the download mode. If the connect step fails or times out, put the board in
+      bootloader mode by hand, then click again:
+    </p>
+    <ol>
+      <li>Hold the <kbd>BOOT</kbd> button.</li>
+      <li>Tap <kbd>RESET</kbd> (or briefly unplug/replug USB) while still holding BOOT.</li>
+      <li>Release <kbd>BOOT</kbd>, then retry <b>Connect &amp; Install</b>.</li>
+    </ol>
+
+    <h2>Your pairings are kept</h2>
+    <p class="note">
+      A normal install rewrites only the firmware — saved pairings and the device
+      colour (stored in a separate flash region) survive. Choosing <b>Erase device</b>
+      in the install dialog wipes them and the beacon will re-run its colour picker
+      on next boot.
+    </p>
+  </div>
+
+  <p class="foot">
+    Powered by <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener">ESP&nbsp;Web&nbsp;Tools</a>.
+    Firmware: BLE proximity beacon (ESP32-C3, ESP-IDF build).
+  </p>
+</main>
+
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</body>
+</html>
