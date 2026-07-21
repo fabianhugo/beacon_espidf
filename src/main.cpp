@@ -25,14 +25,18 @@ static constexpr uint8_t PROTO_MAGIC = 0xBE;
 static constexpr size_t  MFR_LEN      = 9;
 static constexpr uint8_t FLAG_PAIRING = 0x01;
 
-// RSSI threshold above which a paired peer is considered "close" (full magenta).
+// RSSI threshold above which a paired peer is considered "close" (shown at full
+// brightness in that peer's colour, breathing).
 // NOTE: colour only, NOT detection range — any decodable packet from a paired
 // peer marks it present. Coded PHY sensitivity bottoms out around -103 dBm.
 //   -65 dBm ≈ 1 m  |  -75 dBm ≈ 3 m  |  -85 dBm ≈ 8 m  |  -95 dBm ≈ 25 m
 static constexpr int8_t RSSI_NEAR = -95;
 
-// How long without a packet before a paired peer is considered gone (ms).
-static constexpr uint32_t TIMEOUT_MS = 8000;
+// How long without a packet before a paired peer is considered gone (ms). With
+// burst scanning (below) a peer is heard at most once per ~10 s cycle, so this
+// must span a couple of cycles to tolerate a missed burst without the LED
+// flapping present/absent: 25 s ≈ 2.5 cycles.
+static constexpr uint32_t TIMEOUT_MS = 25000;
 
 // When several paired peers are near at once, their colours are shown one after
 // another. PEER_CYCLE_MS = how long each peer's colour holds; PEER_GAP_MS = a
@@ -43,6 +47,16 @@ static constexpr uint32_t PEER_GAP_MS   = 250;
 
 // BLE advertising interval in units of 0.625 ms. 1600 = 1000 ms.
 static constexpr uint16_t ADV_INTERVAL = 1600;
+
+// Burst scanning (power). Rather than scan continuously, scan hard for one burst
+// then leave the radio fully off for a long gap so esp_pm can deep light-sleep.
+// Only RX is duty-cycled — advertising stays continuous (duty-cycling TX too
+// would need both peers' windows to overlap). Burst length ≥ the peer's
+// advertising interval guarantees catching at least one advert per cycle.
+// Detection latency ≈ one cycle (~10 s), which TIMEOUT_MS tolerates. Pairing
+// bypasses this and scans continuously — see the scan scheduler in loop().
+static constexpr uint32_t SCAN_BURST_MS = 1300; // 100% RX per burst (> ADV_INTERVAL)
+static constexpr uint32_t SCAN_SLEEP_MS = 8700; // radio-off gap → ~10 s cycle (~13% duty)
 
 // TX power in dBm. ESP32-S3 tops out near +20 dBm; the chip clamps to its
 // ceiling and the boot log prints what was actually applied.
@@ -64,8 +78,8 @@ static constexpr uint32_t FORGET_HOLD_MS    = 10000; // hold BOOT this long to f
 static constexpr uint8_t BRIGHTNESS = 60; // global FastLED brightness (0–255)
 
 // Peak per-channel brightness for every LED effect (0–255). One knob to dim all
-// modes together — idle rainbow, proximity magenta/gradient, pairing pulse and
-// the feedback flashes. The global FastLED BRIGHTNESS scales on top of this.
+// modes together — idle rainbow, proximity peer-colour, pairing pulse and the
+// feedback flashes. The global FastLED BRIGHTNESS scales on top of this.
 static constexpr uint8_t MAX_BRIGHT = 128;
 
 // BOOT button (active-low). Short press = radio on/off, long press = pairing.
@@ -212,6 +226,15 @@ static void forgetAllPairs() {
   hueProvisioned = false;
 }
 
+// ── Burst-scan state ──────────────────────────────────────────────────────────
+// scanActive: a scan (burst or continuous) is currently running. Cleared by
+// onScanEnd on the BLE task, set/read by loop → volatile. nextBurstAt (when the
+// next burst may start) and scanContinuous (true = start(0) for pairing) are
+// touched only by the loop task.
+static volatile bool scanActive     = false;
+static uint32_t      nextBurstAt     = 0;
+static bool          scanContinuous  = false;
+
 // ── BLE scan callback ───────────────────────────────────────────────────────
 
 class BeaconCallbacks : public NimBLEScanCallbacks {
@@ -230,12 +253,6 @@ class BeaconCallbacks : public NimBLEScanCallbacks {
 
     const int idx = pairIndex(id);
 
-    // Debug: every matching-magic advert we actually hear, paired or not —
-    // lets us tell "peer's packet never arrived this burst" apart from
-    // "arrived but something else dropped it" when detection misses.
-    Serial.printf("RX id=0x%08X rssi=%d paired=%d peerPairing=%d at %lu\n",
-                  id, dev->getRSSI(), idx >= 0, (flags & FLAG_PAIRING) != 0, millis());
-
     // Pairing forms only when BOTH nodes are in pairing mode. Hand the
     // candidate to loop() (which owns NVS writes + feedback); don't touch flash
     // from the BLE task.
@@ -253,10 +270,12 @@ class BeaconCallbacks : public NimBLEScanCallbacks {
     }
   }
 
-  // NimBLE can stop the scan after radio arbitration; restart it — unless the
-  // user switched the radio off, or we'd fight the disable.
+  // A scan ends here either because a burst auto-stopped after SCAN_BURST_MS or
+  // because NimBLE stopped it after radio arbitration. Just record that scanning
+  // stopped; the loop() scan scheduler decides when to start the next burst (or
+  // reasserts continuous scan during pairing).
   void onScanEnd(const NimBLEScanResults&, int) override {
-    if (radioEnabled) NimBLEDevice::getScan()->start(0);
+    scanActive = false;
   }
 };
 
@@ -296,7 +315,8 @@ static void buildAdvert(bool pairing, bool restart) {
   adv->start(0);
 }
 
-// Fully bring up BLE: init, configure Coded-PHY advertising + continuous scan.
+// Fully bring up BLE: init, start Coded-PHY advertising, and configure the scan
+// (the burst/off-gap cycle itself is driven by the scheduler in loop()).
 // Safe to call after deinit() — getScan()/getAdvertising() recreate their objects.
 static void startBle() {
   NimBLEDevice::init("beacon");
@@ -309,19 +329,20 @@ static void startBle() {
 
   buildAdvert(pairingMode, false); // configure + start advertising
 
-  // Scan duty cycle: 30 ms RX out of every 100 ms (30%), not continuous.
-  // Peers advertise once per second (ADV_INTERVAL) and TIMEOUT_MS allows 8 missed
-  // adverts before a paired peer is dropped, so occasional misses are harmless —
-  // P(catch at least one advert within TIMEOUT_MS) stays high even at this duty
-  // cycle.
+  // Burst scanning: window == interval → 100% RX while a burst is running. The
+  // burst/off-gap cycle is driven by the scan scheduler in loop() together with
+  // onScanEnd; here we only configure the scan and let the scheduler fire the
+  // first burst (nextBurstAt=0 → it starts on the next loop iteration).
   NimBLEScan* scan = NimBLEDevice::getScan();
   scan->setScanCallbacks(&scanCallbacks, false);
   scan->setActiveScan(false);
   scan->setPhy(NimBLEScan::SCAN_CODED);
   scan->setInterval(160); // 100 ms period
-  scan->setWindow(48);    // 30 ms RX per period → 30% duty cycle
+  scan->setWindow(160);   // window == interval → 100% RX during a burst
   scan->setDuplicateFilter(0); // report every packet; must follow setScanCallbacks
-  scan->start(0);
+  scanActive     = false;
+  scanContinuous = false;
+  nextBurstAt    = 0;
 
   Serial.printf("BLE beacon started  id=0x%08X  paired=%d  rssi_near=%d dBm\n",
                 myId, pairedCount, RSSI_NEAR);
@@ -336,7 +357,9 @@ static void setRadio(bool on) {
   } else {
     NimBLEDevice::getScan()->stop();
     NimBLEDevice::getAdvertising()->stop(0);
-    pairingMode = false; // can't pair with the radio off
+    pairingMode    = false; // can't pair with the radio off
+    scanActive     = false; // burst scheduler idles while the radio is down
+    scanContinuous = false;
     for (int i = 0; i < MAX_PAIRS; i++) peerSeenAt[i] = 0; // let LEDs lapse to idle
     NimBLEDevice::deinit(true);
   }
@@ -413,28 +436,23 @@ void setup() {
   }
   delay(100);
 
-  // Automatic DFS + BT-coordinated light sleep. THIS is the whole reason for the
-  // ESP-IDF build: unlike the plain `framework = arduino` port (which links
-  // precompiled libs with CONFIG_PM_ENABLE unset, so this returned
-  // ESP_ERR_NOT_SUPPORTED and did nothing), here Arduino is compiled as an IDF
-  // component and sdkconfig.defaults sets CONFIG_PM_ENABLE=y +
-  // CONFIG_FREERTOS_USE_TICKLESS_IDLE=y, so esp_pm_configure() actually engages:
-  // the CPU scales 80↔40 MHz and the idle task light-sleeps between FreeRTOS
-  // ticks and scheduled radio events. Crucially this is the *coordinated* path —
-  // the BT stack holds its own PM lock during active TX/RX — which is what the
-  // manual esp_light_sleep_start() attempt (ble-beacon/docs/claude-power-
-  // optimization.md, 2026-07-20) lacked: that dropped current a lot but silenced
-  // advertising because a whole-chip sleep isn't synced to the controller's TX
-  // schedule. Verify on the boot log below (expect result=OK, not
-  // ESP_ERR_NOT_SUPPORTED) AND with two boards that detection still works.
-  // NOTE (power): the C3 BLE controller's own modem sleep is not yet enabled
-  // (CONFIG_BT_CTRL_MODEM_SLEEP unset); without it the radio may keep the SoC
-  // from reaching deep idle — see docs/claude-espidf-migration.md step 4.
-  // Config struct is target-specific — no unified typedef across IDF targets.
+  // Automatic DFS + BT-coordinated light sleep — the whole reason for the ESP-IDF
+  // build. Under plain `framework = arduino` the precompiled libs have
+  // CONFIG_PM_ENABLE unset, so this returned ESP_ERR_NOT_SUPPORTED and did
+  // nothing. Here Arduino is an IDF component and sdkconfig.defaults enables
+  // CONFIG_PM_ENABLE + tickless idle + BLE controller modem sleep, so the CPU
+  // scales 80↔40 MHz and the SoC light-sleeps between radio events. It is the
+  // *coordinated* path (the BT stack holds its own PM lock during TX/RX), unlike
+  // the manual esp_light_sleep_start() attempt that saved current but silenced
+  // advertising — see ble-beacon/docs/claude-power-optimization.md. Measured
+  // ~20 mA with burst scanning (docs/claude-espidf-migration.md). The boot log
+  // prints result=OK. Config struct is target-specific — no unified typedef.
 #if CONFIG_IDF_TARGET_ESP32S3
   esp_pm_config_esp32s3_t pmConfig = {
 #elif CONFIG_IDF_TARGET_ESP32C3
   esp_pm_config_esp32c3_t pmConfig = {
+#else
+#error "Unsupported target — add its esp_pm_config_*_t above"
 #endif
       .max_freq_mhz       = 80,
       .min_freq_mhz       = 40,
@@ -544,6 +562,36 @@ void loop() {
     Serial.println("Pairing mode OFF");
   }
 
+  // ── Scan scheduler: burst for power, continuous while pairing ────────────────
+  // Advertising runs continuously (buildAdvert); only RX is duty-cycled. Normal
+  // cycle: one SCAN_BURST_MS burst (100% RX) then SCAN_SLEEP_MS radio-off so
+  // esp_pm can deep light-sleep. Pairing needs reliability over power, so it scans
+  // continuously — a single 10 s pairing window must never fall entirely inside an
+  // off-gap (the failure mode documented in the power doc). onScanEnd clears
+  // scanActive when a burst auto-stops.
+  if (radioEnabled) {
+    if (pairingMode) {
+      if (!scanActive || !scanContinuous) {   // (re)assert continuous scan
+        scanContinuous = true;
+        scanActive     = true;
+        NimBLEDevice::getScan()->start(0);     // forever (restarts a burst if one was up)
+      }
+    } else if (scanContinuous) {               // just left pairing → resume bursts
+      scanContinuous = false;
+      NimBLEDevice::getScan()->stop();          // onScanEnd clears scanActive
+      scanActive     = false;
+      nextBurstAt    = now + 100;               // let stop() settle, then burst
+    } else if (now >= nextBurstAt) {
+      // Fire one burst per cycle, gated purely on time (not on scanActive). If a
+      // burst's onScanEnd is ever missed or a start() fails, this still recovers
+      // next cycle — start(…, restart=true) safely (re)starts — instead of
+      // wedging the scan off forever.
+      scanActive  = true;
+      nextBurstAt = now + SCAN_BURST_MS + SCAN_SLEEP_MS;
+      NimBLEDevice::getScan()->start(SCAN_BURST_MS); // auto-stops → onScanEnd
+    }
+  }
+
   // ── Proximity → colour (paired peers only) ──────────────────────────────────
   // Collect the paired peers heard within TIMEOUT_MS and advance their per-peer
   // RSSI EMAs; peers gone silent decay back to the floor. pairedCount/pairedIds
@@ -603,12 +651,12 @@ void loop() {
   if (now - lastStatusPrint >= 1000) {
     lastStatusPrint = now;
     if (shownPeer >= 0) {
-      Serial.printf("present=%d/%d  pairing=%d  showing 0x%08X hue=%u smooth=%.1f\n",
-                    nPresent, pairedCount, pairingMode,
+      Serial.printf("present=%d/%d  pairing=%d  scan=%d  showing 0x%08X hue=%u smooth=%.1f\n",
+                    nPresent, pairedCount, pairingMode, scanActive,
                     pairedIds[shownPeer], peerHue[shownPeer], smoothRssi[shownPeer]);
     } else {
-      Serial.printf("present=%d/%d  pairing=%d  (idle)\n",
-                    nPresent, pairedCount, pairingMode);
+      Serial.printf("present=%d/%d  pairing=%d  scan=%d  (idle)\n",
+                    nPresent, pairedCount, pairingMode, scanActive);
     }
   }
 

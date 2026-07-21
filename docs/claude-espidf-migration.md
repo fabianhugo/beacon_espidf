@@ -289,6 +289,99 @@ battery on a minimal-LED build.
 
 ---
 
+## 2026-07-21 — burst scanning implemented (on top of modem sleep)
+
+User confirmed radio-off is <10 mA (so the radio adds ~20 mA at 30 mA total) and
+the deployment is battery-focused + minimal-LED → worth chasing. Implemented burst
+scanning in `src/main.cpp`, riding on esp_pm's *coordinated* light sleep (not the
+manual sleep that broke detection before):
+
+- Constants: `SCAN_BURST_MS=1300`, `SCAN_SLEEP_MS=8700` (~10 s cycle, ~13 % duty
+  vs the old continuous 30 %). `TIMEOUT_MS` 8000 → 25000 (≈2.5 cycles, so a missed
+  burst doesn't flap peer-present).
+- Scan config: `setWindow(160)` == `setInterval(160)` → 100 % RX *during* a burst.
+- State: `scanActive` (volatile, cleared by `onScanEnd`), `nextBurstAt`,
+  `scanContinuous` (loop-only). `onScanEnd` no longer restarts — it just clears
+  `scanActive`; **all scheduling lives in the loop() scan scheduler**.
+- Scheduler (loop): normal = start a `SCAN_BURST_MS` burst when
+  `now >= nextBurstAt`, which auto-stops → off-gap → repeat. **Pairing bypasses
+  bursting and scans continuously** (`start(0)`), because a single 10 s pairing
+  window can't afford to fall inside an off-gap (the documented bug). Leaving
+  pairing stops the continuous scan and resumes bursts.
+- Advertising stays continuous (only RX is duty-cycled). Status line now prints
+  `scan=<0/1>` so bursts are visible on serial.
+
+Builds clean. **Handed to user to flash both boards (manual bootloader) and
+measure.** Expect current below the 30 mA baseline (rough target ~20–25 mA), at
+the cost of up to ~10 s detection latency. Verify on serial: `scan=1` during
+~1.3 s bursts and `scan=0` during ~8.7 s gaps, `RX id=…` lines land inside
+bursts, `present=1/1` holds across gaps, and pairing still works (continuous scan
+while pairing).
+
+---
+
+## 2026-07-21 — burst-scan measured: ~20 mA average (model confirmed)
+
+User measured the burst build: ~90 mA during each ~1.3 s burst, mostly <10 mA
+(occasionally 20 mA — the 1 Hz advert blips) in the gaps; pairing mode a steady
+90 mA (expected — continuous scan). Average ≈ **20 mA**.
+
+All three measured states fit one model: **avg ≈ duty × 90 mA + (1 − duty) ×
+10 mA** (≈90 mA = radio actively receiving, ≈10 mA = radio off + light sleep +
+minimal LEDs):
+- continuous, no modem sleep: 100 % → 90 mA ✓
+- continuous 30 % windowed + modem sleep: 30 % → ~34 mA (≈30 mA measured) ✓
+- burst 1.3 s / 10 s (13 %): → ~20 mA measured ✓
+
+Progression **90 → 30 → 20 mA**. Breakdown at 20 mA: ~11.7 mA is the burst,
+~8.7 mA the idle floor. **The ~10 mA idle floor is the asymptote** (cost of being
+powered + advertising) — can't beat it while still detecting.
+
+Further headroom = longer off-gap only (burst must stay ≥ ADV_INTERVAL to
+guarantee a catch): 20 s cycle → ~15 mA, 30 s → ~13.5 mA, 60 s → ~12 mA — strongly
+diminishing, and latency grows 1:1 with the cycle. **Recommendation: stop at the
+10 s / ~20 mA point** unless a battery target forces the 20 s / ~15 mA step.
+
+Standing caveat: all radio savings are swamped once the LED strip lights up
+(peer near) — real battery life is LED-dominated in any bright deployment.
+
+---
+
+## 2026-07-21 — review + cleanup pass
+
+Went through `src/main.cpp` for bugs/readability/dead code:
+- **Scheduler robustness (behavioral):** burst-start now gated purely on time
+  instead of `!scanActive`, so a missed `onScanEnd` or a failed
+  `NimBLEScan::start()` self-heals next cycle rather than wedging the scan off
+  forever (which would have killed detection silently after TIMEOUT_MS).
+- Added `#else #error` to the target-specific `esp_pm_config` struct.
+- Fixed the now-wrong `esp_pm` comment (claimed modem sleep unset; it's enabled),
+  trimmed it, and fixed stale "magenta" proximity comments + the `startBle`
+  "continuous scan" header.
+- Removed the per-packet `RX id=…` debug print (serial flood during bursts; the
+  1 Hz status line suffices — in git history if needed).
+- Left `millis()` rollover (49-day edge, self-corrects) and `smoothRssi` first
+  sample (cosmetic) as-is on purpose.
+Builds clean; no logic change beyond the scheduler self-heal.
+
+---
+
+## 2026-07-21 — false alarm: USB serial monitor inflates current (confirmed)
+
+After the cleanup, current briefly read ~110 mA — traced to a **USB serial
+monitor being attached**: an active USB-Serial/JTAG connection blocks light
+sleep, so current jumps to ~90–110 mA regardless of burst mode (the USB-CDC
+caveat, now confirmed empirically). Detach the monitor → back to ~20 mA. The
+cleanup did NOT regress anything; the burst scheduler was confirmed intact from
+the live log (`scan=` toggling ~1.3 s on / ~8.7 s off, peer caught per burst).
+
+Diagnostic tell: the monitor repeatedly logged `Closed serial port … due to
+disconnection` / reopened — that's the board dropping off USB when it deep-sleeps
+in the gaps and re-enumerating on wake, i.e. **proof light sleep is engaging**.
+Rule: measure current with USB serial detached.
+
+---
+
 ## Current state of `beacon_espidf/` (as of 2026-07-21, after the above)
 
 - **Builds clean** (`beacon_c3_espidf`). `src/main.cpp` is now feature-current

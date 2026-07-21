@@ -14,6 +14,16 @@ a long press starts pairing, a very long press forgets all pairings.
 
 ---
 
+## Notizen
+- Gedacht für Seeed Xiao ESP32C3 wegen guter Antenne
+  - Boot Button Pin 9, LED Pin 10 
+- Pairing Modus über lange Drücken des Boot Buttons
+- beim ersten Start wird 10s durch Farben gescrollt, drücken des Boot Buttons loggt diese Farbe als eigene Farbe ein
+- Stromverbrauch geschätzt auf 22mA
+- maximale Zeit bis zum Erkennen 10s (Burst Mode: 1,3s idle, 8,7s scan)
+- Wenn Hex auf Controller gespielt ist muss der uC für erneutes Flashen mit gedrücktem Boot Button eingesteckt werden, wegen schlafendem Serial Interface
+- 10s für Full Reset -> alle bekannten Geräte vergessen und eigene Farbe neu vergeben
+
 ## Hardware
 
 | Item | Notes |
