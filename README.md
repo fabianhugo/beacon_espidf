@@ -14,7 +14,9 @@ Wenn sich zwei FriendlyLeds in der nähe von einander befinden, zeigen sie das �
 - Versorge dein FriendlyLed mit Strom über eine Power Bank
 - Beim ersten Starten des Gerätes durchlaufen alle angeschlossenen LEDs einen Regenbogen, drücke den **B** Knopf um deine Farbe zu wählen
 - Um dich mit anderen FriendlyLeds zu koppeln, muss an beiden FriendlyLeds der **B** Knopf für ein paar Sekunden gedrückt werden. Diese wechseln dann in den Koppelmodus (gelbes Blinken) und bestätigen einen erfolgreichen Koppel Vorgang mit einem blauen Blinken
-- Jetzt ist dein FriendlyLed startklar
+- Um alle gekoppelten Friendlyleds zu vergessen und deine persönliche Farbe neu zu setzen, halt eden **B** Knopf solange gedrückt, bis die Leds mehrmals rot blinken
+- Mit einem kurzen Druck auf **B** begibt sich dein Gerät in den Stromspar Flugmodus
+
 
 
 ## Notizen
