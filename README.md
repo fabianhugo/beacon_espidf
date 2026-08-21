@@ -1,4 +1,31 @@
-# BLE_BEACON
+# FriendlyLeds
+<img width="526" height="640" alt="Image-1" src="https://github.com/user-attachments/assets/626079f2-bef6-42c9-9d3f-3fd2ccf031b9" />
+
+## Was tut es? 
+Wenn sich zwei FriendlyLeds in der nähe von einander befinden, zeigen sie das über ihre Leds an. Die Farbe in der die Leds deiner Friends leuchten, kann dabei eingestellt werden. 
+
+## Anleitung
+- Besorge dir einen ESP32C3 Microcontroller, am besten: Seeed Xiao ESP32C3 wegen dessen guter externer Antenne
+- Übertrage die FriendlyLed Software auf diesen Microcontroller mit einem chrome-basierten Browser und diesem Link: [https://fabianhugo.github.io/beacon_espidf/](https://fabianhugo.github.io/beacon_espidf/)
+- Löte einen Neopixel kompatiblen Lichterstreifen mit bis zu 10 Lichtern an
+  - Spannung + (oft rotes Kabel) -> VUSB
+  - Spannung - (oft schwarzes Kabel) -> GND
+  - Steuerung (oft grünes Kabel) -> D10
+- Versorge dein FriendlyLed mit Strom über eine Power Bank
+- Beim ersten Starten des Gerätes durchlaufen alle angeschlossenen LEDs einen Regenbogen, drücke den **B** Knopf um deine Farbe zu wählen
+- Um dich mit anderen FriendlyLeds zu koppeln, muss an beiden FriendlyLeds der **B** Knopf für ein paar Sekunden gedrückt werden. Diese wechseln dann in den Koppelmodus (gelbes Blinken) und bestätigen einen erfolgreichen Koppel Vorgang mit einem blauen Blinken
+- Jetzt ist dein FriendlyLed startklar
+
+
+## Notizen
+- Gedacht für Seeed Xiao ESP32C3 wegen guter externer Antenne
+  - Boot Button Pin 9, LED Pin 10 
+- Pairing Modus über lange Drücken des Boot Buttons
+- beim ersten Start wird 10s durch Farben gescrollt, drücken des Boot Buttons loggt diese Farbe als eigene Farbe ein
+- Stromverbrauch geschätzt auf 22mA
+- maximale Zeit bis zum Erkennen 10s (Burst Mode: 1,3s idle, 8,7s scan)
+- Wenn Hex auf Controller gespielt ist muss der uC für erneutes Flashen mit gedrücktem Boot Button eingesteckt werden, wegen schlafendem Serial Interface
+- 10s für Full Reset -> alle bekannten Geräte vergessen und eigene Farbe neu vergeben
 
 Minimal proximity-pairing beacon firmware for ESP32-S3 / ESP32-C3.
 No WLED, no WiFi — just BLE 5 Coded PHY advertising + scanning and a WS2812B strip.
@@ -13,16 +40,6 @@ The on-board **BOOT button** controls everything: short press toggles the radio,
 a long press starts pairing, a very long press forgets all pairings.
 
 ---
-
-## Notizen
-- Gedacht für Seeed Xiao ESP32C3 wegen guter Antenne
-  - Boot Button Pin 9, LED Pin 10 
-- Pairing Modus über lange Drücken des Boot Buttons
-- beim ersten Start wird 10s durch Farben gescrollt, drücken des Boot Buttons loggt diese Farbe als eigene Farbe ein
-- Stromverbrauch geschätzt auf 22mA
-- maximale Zeit bis zum Erkennen 10s (Burst Mode: 1,3s idle, 8,7s scan)
-- Wenn Hex auf Controller gespielt ist muss der uC für erneutes Flashen mit gedrücktem Boot Button eingesteckt werden, wegen schlafendem Serial Interface
-- 10s für Full Reset -> alle bekannten Geräte vergessen und eigene Farbe neu vergeben
 
 ## Hardware
 
