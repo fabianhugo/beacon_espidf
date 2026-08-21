@@ -47,10 +47,10 @@ a long press starts pairing, a very long press forgets all pairings.
 
 | Item | Notes |
 |---|---|
-| MCU | ESP32-S3 (`beacon_s3` → `lolin_s3_mini`) or ESP32-C3 (`beacon_c3` → `seeed_xiao_esp32c3`) |
+| MCU | ESP32-C3 (`beacon_c3` → `seeed_xiao_esp32c3`) or  ESP32-S3 (`beacon_s3` → `lolin_s3_mini`) |
 | LED strip | WS2812B (or any FastLED-compatible RGB strip); works with a single LED too |
-| LED data pin | `LED_PIN` — 48 (S3 default) / 10 (C3 env). Set per board via build flags |
-| Button | **BOOT** button, active-low. `BOOT_BUTTON_PIN` — GPIO 0 (S3) / GPIO 9 (C3) |
+| LED data pin | `LED_PIN` —  10 (C3 default) / 48 (S3 default) . Set per board via build flags |
+| Button | **BOOT** button, active-low. `BOOT_BUTTON_PIN` — GPIO 9 (C3) / GPIO 0 (S3)  |
 | Power | 5 V via USB or regulated supply; strip current dominates — see *Range & power* |
 
 Per-board pins (`LED_PIN`, `NUM_LEDS`, `BOOT_BUTTON_PIN`) are set from
